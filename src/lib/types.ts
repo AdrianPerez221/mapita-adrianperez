@@ -8,6 +8,7 @@ export type AnalyzeResponse = {
     lat: number;
     lon: number;
     display_name?: string | null;
+    address?: Record<string, string> | null;
   };
 
   urban?: any;
@@ -18,5 +19,16 @@ export type AnalyzeResponse = {
   sources?: SourceRef[];
   limitations?: string[];
 
+  debug?: any;
+};
+
+export type CompareResponse = {
+  ok: boolean;
+  error?: string;
+  report_markdown?: string;
+  cityA?: any;
+  cityB?: any;
+  sources?: SourceRef[];
+  limitations?: string[];
   debug?: any;
 };

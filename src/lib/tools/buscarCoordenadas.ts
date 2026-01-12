@@ -41,6 +41,9 @@ export async function buscarCoordenadas(direccion: string, country_code: string 
     lat: Number(best.lat),
     lon: Number(best.lon),
     display_name: best.display_name ?? null,
+    address: best.address ?? null,
+    namedetails: best.namedetails ?? null,
+    extratags: best.extratags ?? null,
     raw: best
   };
 }

@@ -17,8 +17,55 @@ function pickPoint(el: OverpassElement) {
   return null;
 }
 
+async function reverseAdminFallback(lat: number, lon: number) {
+  const base = env.NOMINATIM_BASE_URL ?? "https://nominatim.openstreetmap.org";
+  const url = new URL(`${base}/reverse`);
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("lat", String(lat));
+  url.searchParams.set("lon", String(lon));
+  url.searchParams.set("zoom", "10");
+  url.searchParams.set("addressdetails", "1");
+
+  const ua = env.APP_USER_AGENT;
+  const res = await fetchWithTimeout(url, {
+    timeoutMs: 12000,
+    headers: {
+      "User-Agent": ua,
+      "Accept": "application/json"
+    }
+  });
+
+  if (!res.ok) {
+    return { ok: false, http: res.status, source: "nominatim" };
+  }
+
+  const json = await res.json();
+  return { ok: true, source: "nominatim", data: json };
+}
+
+function uniqueEndpoints(endpoints: string[]) {
+  const seen = new Set<string>();
+  return endpoints.filter((url) => {
+    if (seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function capasUrbanismo(lat: number, lon: number, radius_m: number | null) {
-  const overpass = env.OVERPASS_INTERPRETER_URL ?? "https://overpass-api.de/api/interpreter";
+  const defaultOverpass = "https://overpass-api.de/api/interpreter";
+  const fallbackOverpass = [
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.nchc.org.tw/api/interpreter"
+  ];
+  const overpassEndpoints = uniqueEndpoints([
+    env.OVERPASS_INTERPRETER_URL ?? defaultOverpass,
+    ...fallbackOverpass
+  ]);
   const r = radius_m ?? 1200;
 
   // Consulta razonable para infraestructura + usos (OSM)
@@ -34,15 +81,26 @@ export async function capasUrbanismo(lat: number, lon: number, radius_m: number 
 out center 200;
 `.trim();
 
-  const res = await fetchWithTimeout(overpass, {
-    method: "POST",
-    timeoutMs: 20000,
-    headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-    body: `data=${encodeURIComponent(query)}`
-  });
+  let res: Response | null = null;
+  let usedEndpoint = overpassEndpoints[0] ?? defaultOverpass;
+  let lastStatus: number | null = null;
 
-  if (!res.ok) {
-    throw new Error(`Overpass falló: HTTP ${res.status}`);
+  for (const endpoint of overpassEndpoints) {
+    usedEndpoint = endpoint;
+    res = await fetchWithTimeout(endpoint, {
+      method: "POST",
+      timeoutMs: 20000,
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: `data=${encodeURIComponent(query)}`
+    });
+
+    if (res.ok) break;
+    lastStatus = res.status;
+    if (res.status === 429) await sleep(1200);
+  }
+
+  if (!res || !res.ok) {
+    throw new Error(`Overpass fallo: HTTP ${lastStatus ?? "unknown"}`);
   }
 
   const json = await res.json();
@@ -99,12 +157,14 @@ out center 200;
     const ignRes = await fetchWithTimeout(url, { timeoutMs: 9000, headers: { Accept: "application/geo+json,application/json" } });
 
     if (ignRes.ok) {
-      ignAdmin = await ignRes.json();
+      ignAdmin = { ok: true, source: "ign", data: await ignRes.json() };
     } else {
-      ignAdmin = { ok: false, http: ignRes.status };
+      const fallback = await reverseAdminFallback(lat, lon);
+      ignAdmin = fallback.ok ? fallback : { ok: false, http: ignRes.status, source: "ign" };
     }
   } catch (e: any) {
-    ignAdmin = { ok: false, error: e?.message ?? "IGN fallo" };
+    const fallback = await reverseAdminFallback(lat, lon);
+    ignAdmin = fallback.ok ? fallback : { ok: false, error: e?.message ?? "IGN fallo", source: "ign" };
   }
 
   return {
@@ -112,6 +172,9 @@ out center 200;
     counts,
     nearest,
     ign_admin: ignAdmin,
+    admin_source: ignAdmin?.source ?? "ign",
+    overpass_used: usedEndpoint,
+    overpass_fallback_used: usedEndpoint !== (env.OVERPASS_INTERPRETER_URL ?? defaultOverpass),
     raw_count: elements.length
   };
 }

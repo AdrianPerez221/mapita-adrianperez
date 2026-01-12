@@ -1,22 +1,21 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
-import type { AnalyzeResponse } from "@/lib/types";
+import type { CompareResponse } from "@/lib/types";
 
-// shadcn/ui
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
-export default function ReportView({ data }: { data: AnalyzeResponse }) {
+export default function CompareView({ data }: { data: CompareResponse }) {
   return (
     <Card className="p-3">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="text-sm font-semibold">Informe</div>
-          <div className="text-xs text-muted-foreground">Resumen generado con tools</div>
+          <div className="text-sm font-semibold">Comparacion</div>
+          <div className="text-xs text-muted-foreground">Informe VS entre dos ciudades</div>
         </div>
         <Badge variant="secondary">con tools</Badge>
       </div>
@@ -39,29 +38,19 @@ export default function ReportView({ data }: { data: AnalyzeResponse }) {
 
         <TabsContent value="data" className="mt-3">
           <Accordion type="single" collapsible className="w-full">
-            <AccordionItem value="urban">
-              <AccordionTrigger>capasUrbanismo (resumen)</AccordionTrigger>
+            <AccordionItem value="city-a">
+              <AccordionTrigger>Ciudad A (datos)</AccordionTrigger>
               <AccordionContent>
                 <pre className="text-xs whitespace-pre-wrap">
-                  {JSON.stringify(data.urban, null, 2)}
+                  {JSON.stringify(data.cityA ?? null, null, 2)}
                 </pre>
               </AccordionContent>
             </AccordionItem>
-
-            <AccordionItem value="flood">
-              <AccordionTrigger>riesgoInundacion (resumen)</AccordionTrigger>
+            <AccordionItem value="city-b">
+              <AccordionTrigger>Ciudad B (datos)</AccordionTrigger>
               <AccordionContent>
                 <pre className="text-xs whitespace-pre-wrap">
-                  {JSON.stringify(data.flood, null, 2)}
-                </pre>
-              </AccordionContent>
-            </AccordionItem>
-
-            <AccordionItem value="raw">
-              <AccordionTrigger>raw (debug)</AccordionTrigger>
-              <AccordionContent>
-                <pre className="text-xs whitespace-pre-wrap">
-                  {JSON.stringify(data.debug ?? null, null, 2)}
+                  {JSON.stringify(data.cityB ?? null, null, 2)}
                 </pre>
               </AccordionContent>
             </AccordionItem>
@@ -82,7 +71,7 @@ export default function ReportView({ data }: { data: AnalyzeResponse }) {
         <TabsContent value="limits" className="mt-3">
           <ul className="text-xs space-y-2">
             {(data.limitations ?? []).map((l, idx) => (
-              <li key={idx}>• {l}</li>
+              <li key={idx}>- {l}</li>
             ))}
           </ul>
         </TabsContent>

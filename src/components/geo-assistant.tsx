@@ -4,23 +4,57 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
 import ReportView from "@/components/report-view";
+import CompareView from "@/components/compare-view";
 
-// shadcn/ui components (generados por CLI)
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert } from "@/components/ui/alert";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import type { AnalyzeResponse } from "@/lib/types";
+import type { AnalyzeResponse, CompareResponse } from "@/lib/types";
+
+type MapStyle = "standard" | "satellite" | "pollution";
+type Mode = "analyze" | "compare";
+type LocationInfo = {
+  display_name?: string | null;
+  address?: Record<string, string> | null;
+};
+type ComparePoint = {
+  id: "A" | "B";
+  coords: { lat: number; lon: number };
+  locationName?: string | null;
+  locationLines?: string[];
+  address?: Record<string, string> | null;
+};
+
+function buildAddressLines(address: Record<string, string> | null | undefined) {
+  if (!address) return [];
+  const road = address.road || address.pedestrian || address.footway || address.path;
+  const house = address.house_number;
+  const neighborhood = address.neighbourhood || address.suburb || address.quarter || address.city_district || address.district;
+  const locality = address.city || address.town || address.village || address.municipality || address.hamlet;
+  const region = address.state || address.province || address.region || address.state_district;
+  const country = address.country;
+  const postcode = address.postcode;
+
+  const lines = [];
+  if (road) lines.push(`Calle: ${house ? `${road} ${house}` : road}`);
+  if (neighborhood) lines.push(`Zona: ${neighborhood}`);
+  if (locality) lines.push(`Municipio: ${locality}`);
+  if (region) lines.push(`Comunidad/Provincia: ${region}`);
+  if (postcode) lines.push(`CP: ${postcode}`);
+  if (country) lines.push(`Pais: ${country}`);
+  return lines;
+}
 
 const MapView = dynamic(() => import("@/components/map-view"), {
   ssr: false,
   loading: () => (
     <div className="h-full w-full flex items-center justify-center text-sm text-muted-foreground">
-      Cargando mapa…
+      Cargando mapa...
     </div>
   ),
 });
@@ -28,12 +62,25 @@ const MapView = dynamic(() => import("@/components/map-view"), {
 export default function GeoAssistant() {
   const [address, setAddress] = useState("");
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [mapStyle, setMapStyle] = useState<MapStyle>("standard");
+  const [mode, setMode] = useState<Mode>("analyze");
+  const [showFloodLayer, setShowFloodLayer] = useState(false);
+  const [location, setLocation] = useState<LocationInfo | null>(null);
+  const [panRequestId, setPanRequestId] = useState(0);
+  const [comparePoints, setComparePoints] = useState<ComparePoint[]>([]);
 
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<AnalyzeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareData, setCompareData] = useState<CompareResponse | null>(null);
+  const [compareError, setCompareError] = useState<string | null>(null);
 
   const canAnalyze = useMemo(() => Boolean(address.trim()) || Boolean(coords), [address, coords]);
+  const addressLines = useMemo(() => buildAddressLines(location?.address), [location?.address]);
+  const canCompare = comparePoints.length === 2;
+  const compareA = comparePoints.find((p) => p.id === "A") ?? null;
+  const compareB = comparePoints.find((p) => p.id === "B") ?? null;
 
   async function analyze(payload: { address?: string; lat?: number; lon?: number }) {
     setLoading(true);
@@ -62,10 +109,17 @@ export default function GeoAssistant() {
       setData(json);
       if (json.coords) {
         setCoords({ lat: json.coords.lat, lon: json.coords.lon });
+        setLocation({
+          display_name: json.coords.display_name ?? null,
+          address: json.coords.address ?? null
+        });
+        if (payload.address) {
+          setPanRequestId((id) => id + 1);
+        }
       }
       toast.success("Informe generado");
     } catch (e: any) {
-      const msg = e?.message ?? "Falló el análisis";
+      const msg = e?.message ?? "Fallo el analisis";
       setError(msg);
       toast.error(msg);
     } finally {
@@ -73,28 +127,155 @@ export default function GeoAssistant() {
     }
   }
 
+  async function compareCities() {
+    if (comparePoints.length < 2) return;
+    setCompareLoading(true);
+    setCompareError(null);
+    setCompareData(null);
+
+    try {
+      const res = await fetch("/api/compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          a: { lat: comparePoints[0].coords.lat, lon: comparePoints[0].coords.lon },
+          b: { lat: comparePoints[1].coords.lat, lon: comparePoints[1].coords.lon }
+        })
+      });
+      const json = await res.json();
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.error ?? "Error desconocido en /api/compare");
+      }
+      setCompareData(json as CompareResponse);
+      toast.success("Comparacion generada");
+    } catch (e: any) {
+      const msg = e?.message ?? "Fallo la comparacion";
+      setCompareError(msg);
+      toast.error(msg);
+    } finally {
+      setCompareLoading(false);
+    }
+  }
+
+  async function handlePick(p: { lat: number; lon: number }) {
+    if (mode === "compare") {
+      const slot = comparePoints.length === 0 ? "A" : "B";
+      try {
+        setCompareError(null);
+        const res = await fetch("/api/reverse", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({ lat: p.lat, lon: p.lon })
+        });
+        const json = await res.json();
+        if (!res.ok || json?.ok === false) {
+          throw new Error(json?.error ?? "No se pudo obtener ciudad cercana");
+        }
+        const displayName = json?.display_name ?? null;
+        const address = json?.address ?? null;
+        const lines = buildAddressLines(address);
+        const next: ComparePoint = {
+          id: slot,
+          coords: p,
+          locationName: displayName,
+          locationLines: lines,
+          address
+        };
+
+        setCompareData(null);
+        setComparePoints((prev) => {
+          if (prev.length === 0) return [next];
+          if (prev.length === 1) return [prev[0], { ...next, id: "B" }];
+          return [prev[0], { ...next, id: "B" }];
+        });
+
+        toast.message(slot === "A" ? "Ciudad A seleccionada" : "Ciudad B seleccionada", {
+          description: displayName ?? `${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`
+        });
+        return;
+      } catch (e: any) {
+        toast.error(e?.message ?? "No se pudo obtener ciudad cercana");
+        return;
+      }
+    }
+
+    setCoords(p);
+    setLocation(null);
+    try {
+      const res = await fetch("/api/reverse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({ lat: p.lat, lon: p.lon })
+      });
+      const json = await res.json();
+      if (res.ok && json?.ok) {
+        const displayName = json?.display_name ?? null;
+        const address = json?.address ?? null;
+        const lines = buildAddressLines(address);
+        setLocation({ display_name: displayName, address });
+        const descriptionParts = [displayName, ...lines].filter(Boolean);
+        toast.message("Punto seleccionado", {
+          description: descriptionParts.length
+            ? descriptionParts.join(" | ")
+            : `${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`
+        });
+        return;
+      }
+      toast.error(json?.error ?? "No se pudo obtener direccion cercana");
+    } catch (e: any) {
+      toast.error(e?.message ?? "No se pudo obtener direccion cercana");
+    }
+
+    toast.message("Punto seleccionado", {
+      description: `${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`
+    });
+  }
+
   return (
     <TooltipProvider>
       <div className="h-full w-full grid grid-cols-1 lg:grid-cols-[420px_1fr]">
-        {/* Panel lateral */}
         <div className="h-full border-r bg-white/60 backdrop-blur supports-[backdrop-filter]:bg-white/40 p-4 overflow-y-auto">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <h1 className="text-xl font-semibold">GeoAI Assistant</h1>
               <p className="text-sm text-muted-foreground">
-                Dirección o click en el mapa → tools reales → informe con fuentes.
+                Busca una direccion o marca un punto para ver datos cercanos.
               </p>
             </div>
-            <Badge variant="secondary">Clase</Badge>
           </div>
 
           <div className="mt-4 space-y-3">
-            <Card className="p-3">
+            <Card className="p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Modo</div>
+              </div>
+              <Tabs value={mode} onValueChange={(value) => setMode(value as Mode)}>
+                <TabsList className="grid grid-cols-2">
+                  <TabsTrigger value="analyze">Analisis</TabsTrigger>
+                  <TabsTrigger value="compare">Comparar</TabsTrigger>
+                </TabsList>
+              </Tabs>
+              <div className="text-xs text-muted-foreground">
+                {mode === "analyze"
+                  ? "Analiza una direccion o un punto del mapa."
+                  : "Selecciona dos ciudades haciendo click en el mapa."}
+              </div>
+            </Card>
+
+            {mode === "analyze" && (
+            <Card className="p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Entrada</div>
+              </div>
+
               <div className="flex items-center gap-2">
                 <Input
                   value={address}
                   onChange={(e) => setAddress(e.target.value)}
-                  placeholder="Escribe una dirección (ej: Calle X, Valencia)"
+                  placeholder="Escribe una direccion (ej: Calle X, Valencia)"
                 />
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -105,54 +286,213 @@ export default function GeoAssistant() {
                       Buscar
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Geocoding real con Nominatim</TooltipContent>
+                  <TooltipContent side="top" align="center" sideOffset={6}>
+                    Geocoding OSM
+                  </TooltipContent>
                 </Tooltip>
               </div>
 
-              <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-                <span>
+              <div className="flex items-start justify-between text-xs text-muted-foreground">
+                <div>
                   {coords ? (
-                    <>
+                    <div className="text-foreground">
                       Coordenadas:{" "}
-                      <span className="font-medium text-foreground">
+                      <span className="font-medium">
                         {coords.lat.toFixed(6)}, {coords.lon.toFixed(6)}
                       </span>
-                    </>
+                    </div>
                   ) : (
-                    "Tip: también puedes hacer click en el mapa"
+                    <div>Tip: tambien puedes hacer click en el mapa</div>
                   )}
-                </span>
+                  {location?.display_name && (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {location.display_name}
+                    </div>
+                  )}
+                  {addressLines.length > 0 && (
+                    <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+                      {addressLines.map((line) => (
+                        <div key={line}>{line}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    setAddress("");
-                    setCoords(null);
-                    setData(null);
-                    setError(null);
-                    toast("Listo: estado reiniciado");
-                  }}
-                >
-                  Reset
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        setAddress("");
+                        setCoords(null);
+                        setLocation(null);
+                        setData(null);
+                        setError(null);
+                        toast("Listo: estado reiniciado");
+                      }}
+                    >
+                      Reset
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="center" sideOffset={6}>
+                    Reinicia todo
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            </Card>
+            )}
+
+            <Card className="p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Vista de mapa</div>
+              </div>
+              <Tabs value={mapStyle} onValueChange={(value) => setMapStyle(value as MapStyle)}>
+                <TabsList className="grid grid-cols-3">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <TabsTrigger value="standard">Mapa</TabsTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="center" sideOffset={6}>
+                      Mapa base
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <TabsTrigger value="satellite">Satelite</TabsTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="center" sideOffset={6}>
+                      Vista satelite
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <TabsTrigger value="pollution">Contaminacion</TabsTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="center" sideOffset={6}>
+                      Aerosoles
+                    </TooltipContent>
+                  </Tooltip>
+                </TabsList>
+              </Tabs>
+              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>Etiqueta y capas disponibles</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant={showFloodLayer ? "default" : "secondary"}
+                      onClick={() => setShowFloodLayer((prev) => !prev)}
+                    >
+                      {showFloodLayer ? "Ocultar inundacion" : "Mostrar inundacion"}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="center" sideOffset={6}>
+                    Capa inundacion EFAS
+                  </TooltipContent>
+                </Tooltip>
               </div>
             </Card>
 
-            <div className="flex gap-2">
-              <Button
-                className="w-full"
-                disabled={loading || !canAnalyze}
-                onClick={() => {
-                  if (coords) analyze({ lat: coords.lat, lon: coords.lon });
-                  else analyze({ address });
-                }}
-              >
-                Analizar zona
-              </Button>
-            </div>
+            {mode === "analyze" && (
+              <Card className="p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Analisis</div>
+                </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      className="w-full"
+                      disabled={loading || !canAnalyze}
+                      onClick={() => {
+                        if (coords) analyze({ lat: coords.lat, lon: coords.lon });
+                        else analyze({ address });
+                      }}
+                    >
+                      Analizar zona
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="center" sideOffset={6}>
+                    Genera informe
+                  </TooltipContent>
+                </Tooltip>
+                <div className="text-xs text-muted-foreground">
+                  Usa direccion o selecciona un punto en el mapa.
+                </div>
+              </Card>
+            )}
 
-            {loading && (
+            {mode === "compare" && (
+              <Card className="p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Comparacion</div>
+                </div>
+                <div className="space-y-2">
+                  <div className="rounded-md border p-2">
+                    <div className="text-xs font-semibold">Ciudad A</div>
+                    {compareA ? (
+                      <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+                        <div>{compareA.locationName ?? "Sin nombre"}</div>
+                        {compareA.locationLines?.map((line) => (
+                          <div key={line}>{line}</div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-xs text-muted-foreground">Click para seleccionar</div>
+                    )}
+                  </div>
+                  <div className="rounded-md border p-2">
+                    <div className="text-xs font-semibold">Ciudad B</div>
+                    {compareB ? (
+                      <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+                        <div>{compareB.locationName ?? "Sin nombre"}</div>
+                        {compareB.locationLines?.map((line) => (
+                          <div key={line}>{line}</div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-xs text-muted-foreground">Click para seleccionar</div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          setComparePoints([]);
+                          setCompareData(null);
+                          setCompareError(null);
+                        }}
+                      >
+                        Limpiar
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="center" sideOffset={6}>
+                      Borra seleccion
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        className="w-full"
+                        disabled={compareLoading || !canCompare}
+                        onClick={compareCities}
+                      >
+                        Comparar ciudades
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="center" sideOffset={6}>
+                      Genera informe VS
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </Card>
+            )}
+
+            {mode === "analyze" && loading && (
               <Card className="p-3 space-y-2">
                 <Skeleton className="h-4 w-2/3" />
                 <Skeleton className="h-4 w-full" />
@@ -160,30 +500,53 @@ export default function GeoAssistant() {
               </Card>
             )}
 
-            {error && (
+            {mode === "analyze" && error && (
               <Alert className="p-3">
                 <div className="text-sm">
                   <span className="font-semibold">Error:</span> {error}
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">
-                  Si una API externa cae, el backend aplica fallback y lo declara en “Limitaciones”.
+                  Si una API externa falla, el backend aplica fallback y lo declara en Limitaciones.
                 </div>
               </Alert>
             )}
 
-            {data && <ReportView data={data} />}
+            {mode === "analyze" && data && <ReportView data={data} />}
+
+            {mode === "compare" && compareLoading && (
+              <Card className="p-3 space-y-2">
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-5/6" />
+              </Card>
+            )}
+
+            {mode === "compare" && compareError && (
+              <Alert className="p-3">
+                <div className="text-sm">
+                  <span className="font-semibold">Error:</span> {compareError}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Verifica que haya dos ciudades seleccionadas.
+                </div>
+              </Alert>
+            )}
+
+            {mode === "compare" && compareData && <CompareView data={compareData} />}
           </div>
         </div>
 
-        {/* Mapa */}
         <div className="h-full">
           <MapView
-            coords={coords}
+            coords={mode === "compare" ? null : coords}
+            mapStyle={mapStyle}
+            showFloodLayer={showFloodLayer}
+            locationName={location?.display_name ?? null}
+            locationLines={addressLines}
+            panRequestId={panRequestId}
+            comparePoints={mode === "compare" ? comparePoints : undefined}
             onPick={(p) => {
-              setCoords(p);
-              toast.message("Punto seleccionado", {
-                description: `${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`
-              });
+              void handlePick(p);
             }}
             onAnalyze={(p) => analyze({ lat: p.lat, lon: p.lon })}
           />
