@@ -44,9 +44,7 @@ export default function ReportView({ data }: { data: AnalyzeResponse }) {
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="text-sm font-semibold">Informe</div>
-          <div className="text-xs text-muted-foreground">Resumen generado con tools</div>
         </div>
-        <Badge variant="secondary">con tools</Badge>
       </div>
 
       <Separator className="my-3" />

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import dynamic from "next/dynamic";
 import ReportView from "@/components/report-view";
 import CompareView from "@/components/compare-view";
+import HistoryView from "@/components/history-view";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,10 +15,10 @@ import { Alert } from "@/components/ui/alert";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import type { AnalyzeResponse, CompareResponse } from "@/lib/types";
+import type { AnalyzeResponse, CompareResponse, HistoryResponse } from "@/lib/types";
 
 type MapStyle = "standard" | "satellite" | "pollution";
-type Mode = "analyze" | "compare";
+type Mode = "analyze" | "compare" | "historic";
 type LocationInfo = {
   display_name?: string | null;
   address?: Record<string, string> | null;
@@ -85,6 +86,9 @@ export default function GeoAssistant() {
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareData, setCompareData] = useState<CompareResponse | null>(null);
   const [compareError, setCompareError] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyData, setHistoryData] = useState<HistoryResponse | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([]);
   const [saveSourceId, setSaveSourceId] = useState("");
   const [saveName, setSaveName] = useState("");
@@ -161,6 +165,7 @@ export default function GeoAssistant() {
   }
 
   const canAnalyze = useMemo(() => Boolean(address.trim()) || Boolean(coords), [address, coords]);
+  const canHistory = canAnalyze;
   const addressLines = useMemo(() => buildAddressLines(location?.address), [location?.address]);
   const canCompare = comparePoints.length === 2;
   const compareA = comparePoints.find((p) => p.id === "A") ?? null;
@@ -174,7 +179,7 @@ export default function GeoAssistant() {
       address?: Record<string, string> | null;
     }[] = [];
 
-    if (mode === "analyze" && coords) {
+    if ((mode === "analyze" || mode === "historic") && coords) {
       const label = location?.display_name ?? `Ubicacion actual (${coords.lat.toFixed(5)}, ${coords.lon.toFixed(5)})`;
       sources.push({
         id: "analysis",
@@ -309,6 +314,49 @@ export default function GeoAssistant() {
     }
   }
 
+  async function analyzeHistory(payload: { address?: string; lat?: number; lon?: number }) {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    setHistoryData(null);
+
+    try {
+      const res = await fetch("/api/history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          address: payload.address ?? null,
+          lat: payload.lat ?? null,
+          lon: payload.lon ?? null,
+        })
+      });
+
+      const json = (await res.json()) as HistoryResponse;
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.error ?? "Error desconocido en /api/history");
+      }
+
+      setHistoryData(json);
+      if (json.coords) {
+        setCoords({ lat: json.coords.lat, lon: json.coords.lon });
+        setLocation({
+          display_name: json.coords.display_name ?? null,
+          address: json.coords.address ?? null
+        });
+        if (payload.address) {
+          setPanRequestId((id) => id + 1);
+        }
+      }
+      toast.success("Informe historico generado");
+    } catch (e: any) {
+      const msg = e?.message ?? "Fallo el analisis historico";
+      setHistoryError(msg);
+      toast.error(msg);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
   async function compareCities() {
     if (comparePoints.length < 2) return;
     setCompareLoading(true);
@@ -425,6 +473,10 @@ export default function GeoAssistant() {
 
     setCoords(p);
     setLocation(null);
+    if (mode === "historic") {
+      setHistoryData(null);
+      setHistoryError(null);
+    }
     try {
       const res = await fetch("/api/reverse", {
         method: "POST",
@@ -476,19 +528,22 @@ export default function GeoAssistant() {
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Modo</div>
               </div>
               <Tabs value={mode} onValueChange={(value) => setMode(value as Mode)}>
-                <TabsList className="grid grid-cols-2">
+                <TabsList className="grid grid-cols-3">
                   <TabsTrigger value="analyze">Analisis</TabsTrigger>
                   <TabsTrigger value="compare">Comparar</TabsTrigger>
+                  <TabsTrigger value="historic">Historico</TabsTrigger>
                 </TabsList>
               </Tabs>
               <div className="text-xs text-muted-foreground">
                 {mode === "analyze"
                   ? "Analiza una direccion o un punto del mapa."
-                  : "Selecciona dos ciudades haciendo click en el mapa."}
+                  : mode === "compare"
+                    ? "Selecciona dos ciudades haciendo click en el mapa."
+                    : "Informe historico de los ultimos 5 anos para la zona seleccionada."}
               </div>
             </Card>
 
-            {mode === "analyze" && (
+            {(mode === "analyze" || mode === "historic") && (
             <Card className="p-3 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Entrada</div>
@@ -503,8 +558,11 @@ export default function GeoAssistant() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      onClick={() => analyze({ address })}
-                      disabled={loading || !address.trim()}
+                      onClick={() => {
+                        if (mode === "historic") analyzeHistory({ address });
+                        else analyze({ address });
+                      }}
+                      disabled={(mode === "historic" ? historyLoading : loading) || !address.trim()}
                     >
                       Buscar
                     </Button>
@@ -552,6 +610,8 @@ export default function GeoAssistant() {
                         setLocation(null);
                         setData(null);
                         setError(null);
+                        setHistoryData(null);
+                        setHistoryError(null);
                         toast("Listo: estado reiniciado");
                       }}
                     >
@@ -641,6 +701,34 @@ export default function GeoAssistant() {
                 </Tooltip>
                 <div className="text-xs text-muted-foreground">
                   Usa direccion o selecciona un punto en el mapa.
+                </div>
+              </Card>
+            )}
+
+            {mode === "historic" && (
+              <Card className="p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Historico</div>
+                </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      className="w-full"
+                      disabled={historyLoading || !canHistory}
+                      onClick={() => {
+                        if (coords) analyzeHistory({ lat: coords.lat, lon: coords.lon });
+                        else analyzeHistory({ address });
+                      }}
+                    >
+                      Analizar historico
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="center" sideOffset={6}>
+                    Genera informe historico
+                  </TooltipContent>
+                </Tooltip>
+                <div className="text-xs text-muted-foreground">
+                  Ultimos 5 anos con clima y eventos reportados.
                 </div>
               </Card>
             )}
@@ -836,6 +924,27 @@ export default function GeoAssistant() {
 
             {mode === "analyze" && data && <ReportView data={data} />}
 
+            {mode === "historic" && historyLoading && (
+              <Card className="p-3 space-y-2">
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-5/6" />
+              </Card>
+            )}
+
+            {mode === "historic" && historyError && (
+              <Alert className="p-3">
+                <div className="text-sm">
+                  <span className="font-semibold">Error:</span> {historyError}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Si una API externa falla, el backend lo declara en Limitaciones.
+                </div>
+              </Alert>
+            )}
+
+            {mode === "historic" && historyData && <HistoryView data={historyData} />}
+
             {mode === "compare" && compareLoading && (
               <Card className="p-3 space-y-2">
                 <Skeleton className="h-4 w-2/3" />
@@ -871,7 +980,15 @@ export default function GeoAssistant() {
             onPick={(p) => {
               void handlePick(p);
             }}
-            onAnalyze={(p) => analyze({ lat: p.lat, lon: p.lon })}
+            onAnalyze={(p) => {
+              if (mode === "historic") {
+                analyzeHistory({ lat: p.lat, lon: p.lon });
+              } else {
+                analyze({ lat: p.lat, lon: p.lon });
+              }
+            }}
+            analyzeLabel={mode === "historic" ? "Historico aqui" : "Analizar aqui"}
+            analyzeTooltip={mode === "historic" ? "Genera informe historico" : "Genera informe"}
           />
         </div>
       </div>

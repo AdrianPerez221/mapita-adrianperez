@@ -27,12 +27,26 @@ export default function MapView(props: {
   comparePoints?: ComparePoint[];
   onPick: (p: { lat: number; lon: number }) => void;
   onAnalyze: (p: { lat: number; lon: number }) => void;
+  analyzeLabel?: string;
+  analyzeTooltip?: string;
 }) {
   useEffect(() => {
     import("leaflet-defaulticon-compatibility");
   }, []);
 
-  const { coords, mapStyle, showFloodLayer, locationName, locationLines, panRequestId, comparePoints, onPick, onAnalyze } = props;
+  const {
+    coords,
+    mapStyle,
+    showFloodLayer,
+    locationName,
+    locationLines,
+    panRequestId,
+    comparePoints,
+    onPick,
+    onAnalyze,
+    analyzeLabel,
+    analyzeTooltip,
+  } = props;
   const [floodLoading, setFloodLoading] = useState(false);
   const initialCenter = useMemo<LatLngTuple>(() => [39.4699, -0.3763], []);
   const initialZoom = 12;
@@ -180,15 +194,15 @@ export default function MapView(props: {
                 )}
                 <div className="flex gap-2">
                   <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button size="sm" onClick={() => onAnalyze(coords)}>
-                        Analizar aqui
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" align="center" sideOffset={6}>
-                      Genera informe
-                    </TooltipContent>
-                  </Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button size="sm" onClick={() => onAnalyze(coords)}>
+                      {analyzeLabel ?? "Analizar aqui"}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="center" sideOffset={6}>
+                    {analyzeTooltip ?? "Genera informe"}
+                  </TooltipContent>
+                </Tooltip>
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button

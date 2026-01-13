@@ -33,3 +33,20 @@ export type CompareResponse = {
   limitations?: string[];
   debug?: any;
 };
+
+export type HistoryResponse = {
+  ok: boolean;
+  error?: string;
+  coords?: {
+    lat: number;
+    lon: number;
+    display_name?: string | null;
+    address?: Record<string, string> | null;
+  };
+  reverse?: any;
+  weather?: any;
+  events?: any;
+  report_markdown?: string;
+  sources?: SourceRef[];
+  limitations?: string[];
+};
