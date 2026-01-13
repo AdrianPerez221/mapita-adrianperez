@@ -10,7 +10,7 @@ export async function airQuality(lat: number, lon: number) {
       "pm2_5",
       "pm10",
       "us_aqi",
-      "eu_aqi",
+      "european_aqi",
       "nitrogen_dioxide",
       "ozone",
       "sulphur_dioxide",
@@ -35,6 +35,10 @@ export async function airQuality(lat: number, lon: number) {
       source: "open-meteo",
       error: "Sin datos actuales de calidad del aire"
     };
+  }
+
+  if (current?.european_aqi !== undefined && current?.eu_aqi === undefined) {
+    current.eu_aqi = current.european_aqi;
   }
 
   return {

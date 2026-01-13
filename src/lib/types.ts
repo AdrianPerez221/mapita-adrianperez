@@ -13,6 +13,7 @@ export type AnalyzeResponse = {
 
   urban?: any;
   flood?: any;
+  stats?: any;
 
   report_markdown?: string;
 

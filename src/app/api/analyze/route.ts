@@ -7,6 +7,7 @@ import { buscarCoordenadas } from "@/lib/tools/buscarCoordenadas";
 import { capasUrbanismo } from "@/lib/tools/capasUrbanismo";
 import { riesgoInundacion } from "@/lib/tools/riesgoInundacion";
 import { reverseGeocode } from "@/lib/tools/reverseGeocode";
+import { cityStats } from "@/lib/tools/cityStats";
 
 const BodySchema = z.object({
   address: z.string().nullable().optional(),
@@ -19,6 +20,8 @@ const SOURCES = [
   { name: "Nominatim (OSM)", url: "https://nominatim.org/release-docs/latest/develop/overview/" },
   { name: "Overpass API (OSM)", url: "https://wiki.openstreetmap.org/wiki/Overpass_API" },
   { name: "IGN API Features", url: "https://api-features.ign.es/" },
+  { name: "Wikidata SPARQL", url: "https://query.wikidata.org/" },
+  { name: "Wikidata EntityData", url: "https://www.wikidata.org/wiki/Special:EntityData/" },
   { name: "Copernicus EFAS WMS", url: "https://european-flood.emergency.copernicus.eu/api/wms/" },
 ];
 
@@ -53,6 +56,24 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function pickPlaceName(address: Record<string, string> | null | undefined, displayName?: string | null) {
+  if (address) {
+    const name =
+      address.city ||
+      address.town ||
+      address.village ||
+      address.municipality ||
+      address.county ||
+      address.state ||
+      address.region;
+    if (name) return name;
+  }
+  if (displayName) {
+    return displayName.split(",")[0]?.trim() ?? null;
+  }
+  return null;
+}
+
 function systemPrompt() {
   return `
 Eres un analista GIS.
@@ -61,8 +82,9 @@ REGLAS DURAS:
 - No inventes fuentes ni datos.
 - Si una tool falla o no hay cobertura: dilo en "Limitaciones".
 - Si el usuario ya manda lat/lon: NO llames buscarCoordenadas.
-- Siempre llama reverseGeocode, capasUrbanismo y riesgoInundacion antes de redactar el informe final.
+- Siempre llama reverseGeocode, capasUrbanismo, riesgoInundacion y cityStats antes de redactar el informe final.
 - Si urbanismo falla o hay pocos datos, usa reverseGeocode para describir la calle/zona mas cercana.
+- Si hay datos de poblacion/superficie (cityStats), incluyelos en "Descripcion de zona" e indica la fuente (usa stats.source_url si esta disponible).
 
 Devuelve el informe en Markdown con estas secciones exactas:
 ## Descripcion de zona
@@ -152,6 +174,25 @@ export async function POST(req: Request) {
           },
         },
       },
+      {
+        type: "function",
+        function: {
+          name: "cityStats",
+          description: "Busca poblacion y superficie de la ciudad/municipio mas cercano (Wikidata).",
+          parameters: {
+            type: "object",
+            properties: {
+              lat: { type: "number" },
+              lon: { type: "number" },
+              name_hint: { type: "string" },
+              country_code: { type: "string" },
+              wikidata_id: { type: "string" },
+            },
+            required: ["lat", "lon"],
+            additionalProperties: false,
+          },
+        },
+      },
     ];
 
     const messages: any[] = [
@@ -159,8 +200,8 @@ export async function POST(req: Request) {
       {
         role: "user",
         content: hasCoords
-          ? `El usuario selecciono un punto en el mapa: lat=${body.lat}, lon=${body.lon}. Ejecuta reverseGeocode, capasUrbanismo y riesgoInundacion.`
-          : `El usuario escribio una direccion: "${body.address}". Primero usa buscarCoordenadas; luego usa reverseGeocode, capasUrbanismo y riesgoInundacion.`,
+          ? `El usuario selecciono un punto en el mapa: lat=${body.lat}, lon=${body.lon}. Ejecuta reverseGeocode, capasUrbanismo, riesgoInundacion y cityStats.`
+          : `El usuario escribio una direccion: "${body.address}". Primero usa buscarCoordenadas; luego usa reverseGeocode, capasUrbanismo, riesgoInundacion y cityStats.`,
       },
     ];
 
@@ -168,6 +209,7 @@ export async function POST(req: Request) {
     let urban: any = null;
     let flood: any = null;
     let reverse: any = null;
+    let stats: any = null;
     let geocodeFailed = false;
     let geocodeUsed = !geocodeRequired;
     let reverseUsed = false;
@@ -205,6 +247,7 @@ export async function POST(req: Request) {
           coords && !reverseUsed ? "reverseGeocode" : null,
           urban ? null : "capasUrbanismo",
           flood ? null : "riesgoInundacion",
+          coords ? (stats ? null : "cityStats") : null,
         ].filter(Boolean) as string[];
 
         if (missingTools.length) {
@@ -233,6 +276,7 @@ export async function POST(req: Request) {
           coords,
           urban,
           flood,
+          stats,
           report_markdown,
           sources: SOURCES,
           limitations: limitations.length ? limitations : ["Sin incidencias destacables reportadas por las tools."],
@@ -381,6 +425,44 @@ export async function POST(req: Request) {
             continue;
           }
 
+          if (name === "cityStats") {
+            const latArg = toNumber(args.lat) ?? coords?.lat ?? (hasCoords ? body.lat : null);
+            const lonArg = toNumber(args.lon) ?? coords?.lon ?? (hasCoords ? body.lon : null);
+
+            if (latArg === null || lonArg === null) {
+              const out = { ok: false, error: "lat/lon invalidos para cityStats" };
+              limitations.push("cityStats: lat/lon invalidos.");
+              stats = out;
+              messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(out) });
+              continue;
+            }
+
+            const address = reverse?.address ?? coords?.address ?? null;
+            const displayName = reverse?.display_name ?? coords?.display_name ?? null;
+            const nameHintArg = typeof args.name_hint === "string" && args.name_hint.trim() ? args.name_hint : null;
+            const nameHint =
+              nameHintArg ?? pickPlaceName(address, displayName) ?? (typeof body.address === "string" ? body.address : null);
+            const countryCodeArg = typeof args.country_code === "string" ? args.country_code : null;
+            const countryCode = countryCodeArg ?? address?.country_code ?? null;
+            const wikidataIdArg = typeof args.wikidata_id === "string" ? args.wikidata_id : null;
+            const wikidataId = wikidataIdArg ?? reverse?.extratags?.wikidata ?? null;
+
+            const out = await cityStats(latArg, lonArg, { nameHint, countryCode, wikidataId, language: "es" });
+            stats = out;
+            if (!coords) coords = { lat: latArg, lon: lonArg, display_name: displayName ?? null };
+
+            if (!out?.ok) {
+              limitations.push("Poblacion/superficie: no se pudieron obtener datos.");
+            } else {
+              if (out?.city?.population == null) limitations.push("Poblacion: no disponible en fuentes.");
+              if (out?.city?.area_km2 == null) limitations.push("Superficie: no disponible en fuentes.");
+              if (out?.city?.area_estimated) limitations.push("Superficie: valor estimado por unidad no explicita.");
+            }
+
+            messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(out) });
+            continue;
+          }
+
           const out = { ok: false, error: `Tool desconocida: ${name}` };
           limitations.push(`Tool desconocida solicitada por el modelo: ${name}`);
           messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(out) });
@@ -390,6 +472,7 @@ export async function POST(req: Request) {
             if (call.function.name === "capasUrbanismo") urban = out;
             if (call.function.name === "riesgoInundacion") flood = out;
             if (call.function.name === "reverseGeocode") reverse = out;
+            if (call.function.name === "cityStats") stats = out;
             if (call.function.name === "buscarCoordenadas") geocodeFailed = true;
           }
           limitations.push(`${call.function.name} fallo: ${out.error}`);

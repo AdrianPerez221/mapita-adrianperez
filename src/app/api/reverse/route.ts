@@ -12,7 +12,7 @@ export async function POST(req: Request) {
   try {
     const body = Body.parse(await req.json());
     const out = await reverseGeocode(body.lat, body.lon, body.zoom ?? 18);
-    return NextResponse.json({ ok: out.ok === false ? false : true, ...out });
+    return NextResponse.json({ ...out, ok: out.ok !== false });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? "Error reverse" }, { status: 400 });
   }
