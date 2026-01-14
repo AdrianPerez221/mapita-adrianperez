@@ -71,6 +71,7 @@ const MapView = dynamic(() => import("@/components/map-view"), {
 
 export default function GeoAssistant() {
   const storageKey = "geoai_saved_locations";
+  const savedFocusZoom = 15;
   const [address, setAddress] = useState("");
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [mapStyle, setMapStyle] = useState<MapStyle>("standard");
@@ -78,6 +79,7 @@ export default function GeoAssistant() {
   const [showFloodLayer, setShowFloodLayer] = useState(false);
   const [location, setLocation] = useState<LocationInfo | null>(null);
   const [panRequestId, setPanRequestId] = useState(0);
+  const [panZoom, setPanZoom] = useState<number | null>(null);
   const [comparePoints, setComparePoints] = useState<ComparePoint[]>([]);
 
   const [loading, setLoading] = useState(false);
@@ -161,6 +163,7 @@ export default function GeoAssistant() {
     setAddress("");
     setData(null);
     setError(null);
+    setPanZoom(savedFocusZoom);
     setPanRequestId((id) => id + 1);
   }
 
@@ -301,6 +304,7 @@ export default function GeoAssistant() {
           address: nextData.coords.address ?? null
         });
         if (payload.address) {
+          setPanZoom(null);
           setPanRequestId((id) => id + 1);
         }
       }
@@ -344,6 +348,7 @@ export default function GeoAssistant() {
           address: json.coords.address ?? null
         });
         if (payload.address) {
+          setPanZoom(null);
           setPanRequestId((id) => id + 1);
         }
       }
@@ -612,6 +617,7 @@ export default function GeoAssistant() {
                         setError(null);
                         setHistoryData(null);
                         setHistoryError(null);
+                        setPanZoom(null);
                         toast("Listo: estado reiniciado");
                       }}
                     >
@@ -976,6 +982,7 @@ export default function GeoAssistant() {
             locationName={location?.display_name ?? null}
             locationLines={addressLines}
             panRequestId={panRequestId}
+            panZoom={panZoom}
             comparePoints={mode === "compare" ? comparePoints : undefined}
             onPick={(p) => {
               void handlePick(p);

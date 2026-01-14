@@ -29,6 +29,7 @@ export default function MapView(props: {
   onAnalyze: (p: { lat: number; lon: number }) => void;
   analyzeLabel?: string;
   analyzeTooltip?: string;
+  panZoom?: number | null;
 }) {
   useEffect(() => {
     import("leaflet-defaulticon-compatibility");
@@ -41,6 +42,7 @@ export default function MapView(props: {
     locationName,
     locationLines,
     panRequestId,
+    panZoom,
     comparePoints,
     onPick,
     onAnalyze,
@@ -50,6 +52,8 @@ export default function MapView(props: {
   const [floodLoading, setFloodLoading] = useState(false);
   const initialCenter = useMemo<LatLngTuple>(() => [39.4699, -0.3763], []);
   const initialZoom = 12;
+  const minZoom = 3;
+  const maxZoom = 18;
   const gibsDate = useMemo(() => {
     const d = new Date();
     d.setUTCDate(d.getUTCDate() - 2);
@@ -85,9 +89,11 @@ export default function MapView(props: {
   function FocusOnCoords({
     coords,
     panRequestId,
+    panZoom,
   }: {
     coords: { lat: number; lon: number } | null;
     panRequestId: number;
+    panZoom?: number | null;
   }) {
     const map = useMap();
     const lastPan = useRef<number>(panRequestId);
@@ -96,15 +102,26 @@ export default function MapView(props: {
       if (!coords) return;
       if (panRequestId === lastPan.current) return;
       lastPan.current = panRequestId;
-      map.panTo([coords.lat, coords.lon], { animate: true });
-    }, [coords?.lat, coords?.lon, map, panRequestId]);
+      const target: LatLngTuple = [coords.lat, coords.lon];
+      if (typeof panZoom === "number") {
+        map.setView(target, panZoom, { animate: true });
+        return;
+      }
+      map.panTo(target, { animate: true });
+    }, [coords?.lat, coords?.lon, map, panRequestId, panZoom]);
 
     return null;
   }
 
   return (
     <div className="relative h-full w-full">
-      <MapContainer center={initialCenter} zoom={initialZoom} className="h-full w-full">
+      <MapContainer
+        center={initialCenter}
+        zoom={initialZoom}
+        minZoom={minZoom}
+        maxZoom={maxZoom}
+        className="h-full w-full"
+      >
       {mapStyle === "satellite" ? (
         <TileLayer
           attribution="&copy; Esri, Maxar, Earthstar Geographics, and the GIS User Community"
@@ -145,7 +162,7 @@ export default function MapView(props: {
         )}
 
       <ClickHandler onPick={onPick} />
-      <FocusOnCoords coords={coords} panRequestId={panRequestId} />
+      <FocusOnCoords coords={coords} panRequestId={panRequestId} panZoom={panZoom} />
 
         {comparePoints && comparePoints.length > 0 ? (
           comparePoints.map((point) => (
