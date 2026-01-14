@@ -54,6 +54,7 @@ export default function MapView(props: {
   const initialZoom = 12;
   const minZoom = 3;
   const maxZoom = 18;
+  const maxBounds = useMemo<[LatLngTuple, LatLngTuple]>(() => [[-85, -180], [85, 180]], []);
   const gibsDate = useMemo(() => {
     const d = new Date();
     d.setUTCDate(d.getUTCDate() - 2);
@@ -96,19 +97,24 @@ export default function MapView(props: {
     panZoom?: number | null;
   }) {
     const map = useMap();
-    const lastPan = useRef<number>(panRequestId);
+    const coordsRef = useRef(coords);
 
     useEffect(() => {
-      if (!coords) return;
-      if (panRequestId === lastPan.current) return;
-      lastPan.current = panRequestId;
-      const target: LatLngTuple = [coords.lat, coords.lon];
+      coordsRef.current = coords;
+    }, [coords]);
+
+    useEffect(() => {
+      const current = coordsRef.current;
+      if (!current) return;
+      if (!panRequestId) return;
+      const target: LatLngTuple = [current.lat, current.lon];
       if (typeof panZoom === "number") {
-        map.setView(target, panZoom, { animate: true });
+        const nextZoom = Math.min(maxZoom, Math.max(minZoom, panZoom));
+        map.flyTo(target, nextZoom, { animate: true, duration: 1.1 });
         return;
       }
       map.panTo(target, { animate: true });
-    }, [coords?.lat, coords?.lon, map, panRequestId, panZoom]);
+    }, [map, panRequestId, panZoom]);
 
     return null;
   }
@@ -120,6 +126,13 @@ export default function MapView(props: {
         zoom={initialZoom}
         minZoom={minZoom}
         maxZoom={maxZoom}
+        maxBounds={maxBounds}
+        maxBoundsViscosity={1}
+        doubleClickZoom={false}
+        touchZoom={false}
+        tap={false}
+        boxZoom={false}
+        keyboard={false}
         className="h-full w-full"
       >
       {mapStyle === "satellite" ? (

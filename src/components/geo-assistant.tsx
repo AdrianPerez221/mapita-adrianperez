@@ -71,7 +71,7 @@ const MapView = dynamic(() => import("@/components/map-view"), {
 
 export default function GeoAssistant() {
   const storageKey = "geoai_saved_locations";
-  const savedFocusZoom = 15;
+  const savedFocusZoom = 17;
   const [address, setAddress] = useState("");
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [mapStyle, setMapStyle] = useState<MapStyle>("standard");
@@ -434,6 +434,7 @@ export default function GeoAssistant() {
   }
 
   async function handlePick(p: { lat: number; lon: number }) {
+    setPanZoom(null);
     if (mode === "compare") {
       const slot = comparePoints.length === 0 ? "A" : "B";
       try {
