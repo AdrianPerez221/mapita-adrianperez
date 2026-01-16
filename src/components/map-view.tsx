@@ -55,15 +55,7 @@ export default function MapView(props: {
   const minZoom = 3;
   const maxZoom = 18;
   const maxBounds = useMemo<[LatLngTuple, LatLngTuple]>(() => [[-85, -180], [85, 180]], []);
-  const gibsDate = useMemo(() => {
-    const d = new Date();
-    d.setUTCDate(d.getUTCDate() - 2);
-    return d.toISOString().slice(0, 10);
-  }, []);
-  const gibsUrl = useMemo(
-    () => `https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi?time=${gibsDate}`,
-    [gibsDate]
-  );
+  const gibsUrl = useMemo(() => "https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi", []);
   const floodEventHandlers = useMemo(
     () => ({
       loading: () => setFloodLoading(true),
@@ -119,6 +111,15 @@ export default function MapView(props: {
     return null;
   }
 
+  function DisableTap() {
+    const map = useMap();
+    useEffect(() => {
+      const tap = (map as { tap?: { disable: () => void } }).tap;
+      if (tap) tap.disable();
+    }, [map]);
+    return null;
+  }
+
   return (
     <div className="relative h-full w-full">
       <MapContainer
@@ -130,7 +131,6 @@ export default function MapView(props: {
         maxBoundsViscosity={1}
         doubleClickZoom={false}
         touchZoom={false}
-        tap={false}
         boxZoom={false}
         keyboard={false}
         className="h-full w-full"
@@ -154,10 +154,10 @@ export default function MapView(props: {
       {mapStyle === "pollution" && (
         <WMSTileLayer
           url={gibsUrl}
-          layers="MODIS_Terra_Aerosol"
+          layers="MERRA2_Aerosol_Optical_Depth_Analysis_Monthly"
           format="image/png"
           transparent
-          opacity={0.6}
+          opacity={0.62}
           attribution="NASA GIBS"
         />
       )}
@@ -176,6 +176,7 @@ export default function MapView(props: {
 
       <ClickHandler onPick={onPick} />
       <FocusOnCoords coords={coords} panRequestId={panRequestId} panZoom={panZoom} />
+      <DisableTap />
 
         {comparePoints && comparePoints.length > 0 ? (
           comparePoints.map((point) => (
